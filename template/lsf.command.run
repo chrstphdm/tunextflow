@@ -1,0 +1,3 @@
+#!/bin/bash
+
+bsub -o {{STDOUT_FILE}} -e {{STDERR_FILE}} -J {{JOB_NAME}} -P {{PROJECT_NAME}} < {{COMMAND_SH_FILE}}

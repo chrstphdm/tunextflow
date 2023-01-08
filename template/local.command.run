@@ -1,0 +1,3 @@
+#!/bin/bash
+
+nohup ./{{COMMAND_SH_FILE}} 2>{{STDERR_FILE}} 1>{{STDOUT_FILE}} &
