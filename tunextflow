@@ -844,7 +844,7 @@ function Os:require() {
   fi
 }
 
-function Os:folder() {
+function Os:create_folder() {
   if [[ -n "$1" ]]; then
     local folder="$1"
     local max_days=${2:-365}
@@ -854,6 +854,29 @@ function Os:folder() {
     else
       IO:debug "$clean_icon Cleanup folder: [$folder] - delete files older than $max_days day(s)"
       find "$folder" -mtime "+$max_days" -type f -exec rm {} \;
+    fi
+  fi
+}
+
+function Os:check_folder() {
+  local folder_path
+  local folder_name
+  local must_exists
+  local extension
+  folder_path=$1
+  folder_name=$2
+  must_exists=$3
+  extension=${4:-}
+  if [[ ! -d "$folder_path" ]]; then
+    [[ $must_exists -eq 1 ]] && IO:die "Folder '${folder_name}' [${folder_path}] does not exist and is mandatory"
+    IO:alert "Folder '${folder_name}' [${folder_path}] does not exist" 
+  else
+    if [[ $must_exists -eq 1 ]]; then
+      if ! eval "ls ${folder_path}/*.${extension} &> /dev/null"  ; then
+        IO:die "Folder '${folder_name}' [${folder_path}] does not contain any file with '*.${extension}' extension"
+      fi
+    else
+      IO:alert "Folder '${folder_name}' [${folder_path}] is empty" 
     fi
   fi
 }
@@ -1018,11 +1041,11 @@ function Script:initialize() {
   log_file=""
   if [[ -n "${tmp_dir:-}" ]]; then
     # clean up TMP folder after 1 day
-    Os:folder "$tmp_dir" 1
+    Os:create_folder "$tmp_dir" 1
   fi
   if [[ -n "${log_dir:-}" ]]; then
     # clean up LOG folder after 1 month
-    Os:folder "$log_dir" 30
+    Os:create_folder "$log_dir" 30
     log_file="$log_dir/$script_prefix.$execution_day.log"
     IO:debug "$config_icon log_file: $log_file"
   fi
