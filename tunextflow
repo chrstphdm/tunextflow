@@ -120,6 +120,16 @@ do_action1() {
   # Os:require "convert" "imagemagick"
   # Os:require "IO:progressbar" "basher install pforret/IO:progressbar"
   # (code)
+do_run(){
+  IO:log "execution: [${command_run_file}]"
+  # exec bash -c "${$command_run_file}"
+  source "${$command_run_file}"
+  local status=$?
+  IO:log "execution status: [${status}]"
+  if [[ $status -ne 0 ]]
+    IO:die "run_dir_full folder: [${run_dir_full}] has not been generated"
+  fi
+}
 }
 
 do_action2() {
