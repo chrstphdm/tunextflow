@@ -47,16 +47,20 @@ function Option:config() {
 #commented lines will be filtered
 flag|h|help|show usage
 flag|q|quiet|no output
+flag|d|dry|nothing saved, only available in tmp_dir
 flag|v|verbose|also show debug messages
 flag|f|force|do not ask for confirmation (always yes)
+option|d|dataset_id|uniq id references a dataset (config files;lib files;param files;tunextflow env files)
 option|c|config_dir|folder for config files|
-option|l|library_dir|folder for library files|
+option|l|lib_dir|folder for library files|
 option|m|param_dir|folder for param files|
 option|p|project_dir|folder for project files|
 option|r|run_dir|folder used to launch project pipeline|
-option|l|log_dir|folder for log files |$HOME/log/$script_prefix
+option|u|uuid|uniq id for the pipeline|$(cat /proc/sys/kernel/random/uuid)
+option|l|log_dir|folder for log files |$PWD
 option|t|tmp_dir|folder for temp files|/tmp/$script_prefix
-choice|1|action|action to perform|action1,action2,check,env,update
+option|e|executor|executor used to launch nextflow|local
+choice|1|action|action to perform|generate,run,config,log,check,env,update
 #param|?|input|input file/text
 " -v -e '^#' -e '^\s*$'
 }
@@ -70,18 +74,188 @@ Script:main() {
 
   Os:require "awk" "nextflow"
 
+  ### init dataset_id/ .env file
+  if [[ -z "${dataset_id}" ]]; then
+    IO:alert "No -d|dataset_id argument : use current_dir [$PWD]"
+    dataset_id=""
+  else
+    dataset_id=""dataset_id
+  fi
+
+  ### init project_dir
+  if [[ -z "${project_dir}" ]]; then
+    IO:alert "No -p|--project_dir argument : use current_dir [$PWD]"
+    project_dir="${PWD}"
+  fi
+  project_dir=$(realpath ${project_dir})
+  if [[ ! -f "${project_dir}/main.nf" ]]; then
+    IO:die "project_dir [$project_dir] must contain 'main.nf'"
+  fi
+  project_basename=$(basename ${project_dir})
+  pipeline_name=$(eval "echo ${PIPELINE_NAME_PATTERN}")
+  pipeline_version=$(eval "echo ${PIPELINE_VERSION_PATTERN}")
+
+  ### init run_dir
+  if [[ -z "${run_dir}" ]]; then
+     IO:announce "No -r|--run_dir argument : use default from env [$LAUNCH_DIR_ROOT_DEFAULT]"
+    run_dir=$(eval "echo ${LAUNCH_DIR_ROOT_DEFAULT}")
+    if [[ ! -d "${run_dir}" ]]; then
+      IO:die "run_dir [$run_dir] from .env file does not exists"
+    fi
+  else
+    if [[ ! -d "${run_dir}" ]]; then
+      IO:die "run_dir [$run_dir] does not exists"
+    fi
+  fi
+
+  local run_dir_full=$(eval "echo ${run_dir}/${LAUNCH_DIR_NAME_PATTERN}")
+  if [[ -d "${run_dir_full}" ]]; then
+    IO:die "run_dir/${LAUNCH_DIR_NAME_PATTERN} [$run_dir_full] already exists"
+  fi
+
+  IO:debug "run_dir_full: [${run_dir_full}]"
+
+  ### init command_sh_file
+  if [[ ! -z "${COMMAND_SH_NAME_PATTERN}" ]]; then
+    command_sh_file=$(eval "echo ${COMMAND_SH_NAME_PATTERN}")
+  else
+    IO:die "missing COMMAND_SH_NAME_PATTERN from general .env file"
+  fi
+
+  ### init command_run_file
+  if [[ ! -z "${COMMAND_RUN_NAME_PATTERN}" ]]; then
+    command_run_file=$(eval "echo ${COMMAND_RUN_NAME_PATTERN}")
+  else
+    IO:die "missing COMMAND_RUN_NAME_PATTERN from general .env file"
+  fi
+
+  ## init stdout/stderr files
+  if [[ ! -z "${STDOUT_NAME_PATTERN}" ]]; then
+    stdout_file=$(eval "echo ${STDOUT_NAME_PATTERN}")
+  else
+    IO:die "missing STDOUT_NAME_PATTERN from general .env file"
+  fi
+  if [[ ! -z "${STDERR_NAME_PATTERN}" ]]; then
+    stderr_file=$(eval "echo ${STDERR_NAME_PATTERN}")
+  else
+    IO:die "missing STDERR_NAME_PATTERN from general .env file"
+  fi
+
+  ### init executor
+  if [[ -z "${executor}" ]]; then
+    executor="${EXECUTOR_DEFAULT}"
+    IO:debug "executor: [${EXECUTOR_DEFAULT}]"
+  fi
+
+  ### init executor_run_template_file
+  if [[ ! -z "${EXECUTOR_RUN_TEMPLATE_PATTERN}" ]]; then
+    executor_run_template_file=$(eval "echo ${EXECUTOR_RUN_TEMPLATE_PATTERN}")
+  else
+    IO:die "missing EXECUTOR_RUN_TEMPLATE_PATTERN from general .env file"
+  fi
+  [[ ! -f "$executor_run_template_file" ]] && IO:die "Unknown executor '${executor}', no corresponding template file[$script_install_folder/template/${executor}.command.run]"
+  IO:debug "executor_run_template_file: [${executor_run_template_file}]"
+
+  ### init default_sh_template_file
+  if [[ ! -z "${SH_TEMPLATE_PATTERN}" ]]; then
+    default_sh_template_file=$(eval "echo ${SH_TEMPLATE_PATTERN}")
+  else
+    IO:die "missing SH_TEMPLATE_PATTERN from general .env file"
+  fi
+  [[ ! -f "$default_sh_template_file" ]] && IO:die "Missing template file [$default_sh_template_file], please, check installation" 
+
+  ### init before_script
+  before_script=""
+  if [[ ! -z "${before_script}" ]]; then
+    [[ ! -f "${before_script}" ]] && IO:die "before_script [${before_script}] does not exist"
+    before_script=$(realpath ${before_script})
+  fi
+
+  ### init after_script
+  after_script=""
+  if [[ ! -z "${after_script}" ]]; then
+    [[ ! -f "${after_script}" ]] && IO:die "after_script [${after_script}] does not exist"
+    after_script=$(realpath ${after_script})
+  fi
+
+  ### init module_load
+  module_load=""
+
+  ### init nextflow_bin_path
+  if [[ ! -z "${NEXTFLOW_VERSION}" ]]; then
+    nextflow_version_current="${NEXTFLOW_VERSION}"
+  else
+    nextflow_version_current="${NEXTFLOW_VERSION_DEFAULT}"
+  fi
+  nextflow_bin_path="${NEXTFLOW_BINARIES_DIR}/nextflow-${nextflow_version_current}"
+  [[ ! -f "${nextflow_bin_path}" ]] && IO:die "nextflow binary [${nextflow_bin_path}] does not exist"
+
+  ### init config_dir
+  if [[ -z "${config_dir}" ]]; then
+    if [[ ! -z "${CONFIG_DIR_ROOT}" ]]; then
+      config_dir=$(eval "echo ${CONFIG_DIR_ROOT}/${CONFIG_DIR_PATTERN}")
+      Os:check_folder "${config_dir}" "config_dir" "0" "config"
+    fi
+  else
+    Os:check_folder "${config_dir}" "config_dir" "1" "config"
+  fi
+  IO:debug "config_dir: [${config_dir}]"
+
+  ### init lib_dir
+  if [[ -z "${lib_dir}" ]]; then
+    if [[ ! -z "${LIB_DIR_ROOT}" ]]; then
+      lib_dir=$(eval "echo ${LIB_DIR_ROOT}/${LIB_DIR_PATTERN}")
+      Os:check_folder "${lib_dir}" "lib_dir" "0" "config"
+    fi
+  else
+    Os:check_folder "${lib_dir}" "lib_dir" "1" "config"
+  fi
+  IO:debug "lib_dir: [${lib_dir}]"
+
+  ### init param_dir
+  if [[ -z "${param_dir}" ]]; then
+    if [[ ! -z "${PARAM_DIR_ROOT}" ]]; then
+      param_dir=$(eval "echo ${PARAM_DIR_ROOT}/${PARAM_DIR_PATTERN}")
+      IO:announce "No -m|--param_dir argument : use default from env [${PARAM_DIR_ROOT}/${PARAM_DIR_PATTERN}]"
+    else
+      IO:die "No -m|--param_dir argument neither PARAM_DIR_ROOT from env. I need at least ONE param file."
+    fi
+  fi
+  Os:check_folder "${param_dir}" "param_dir" "1" "{json,yaml,yml}"
+
+  IO:log "config_dir: ${config_dir}"
+  IO:log "lib_dir: ${lib_dir}"
+  IO:log "param_dir: ${param_dir}"
+  IO:log "project_dir: ${project_dir}"
+  IO:log "run_dir: ${run_dir}"
+  IO:log "run_dir_full: ${run_dir_full}"
+ 
+
   action=$(Str:lower "$action")
   case $action in
-    action1)
-      #TIP: use «$script_prefix action1» to ...
-      #TIP:> $script_prefix action1
-      do_action1
+    generate)
+      #TIP: use «$script_prefix generate» to ...
+      #TIP:> $script_prefix generate
+      do_generate
       ;;
 
-    action2)
-      #TIP: use «$script_prefix action2» to ...
-      #TIP:> $script_prefix action2
-      do_action2
+    run)
+      #TIP: use «$script_prefix run» to ...
+      #TIP:> $script_prefix run
+      do_generate
+      do_run
+      ;;
+
+    config)
+      #TIP: use «$script_prefix config» to ...
+      #TIP:> $script_prefix config
+      do_config
+      ;;
+
+    log)
+      #TIP: use «$script_prefix log» to ...
+      #TIP:> $script_prefix log
+      do_log
       ;;
 
     check | env)
@@ -113,13 +287,104 @@ Script:main() {
 ## Put your helper scripts here
 #####################################################################
 
-do_action1() {
-  IO:log "action1"
+do_generate() {
   # Examples of required binaries/scripts and how to install them
   # Os:require "ffmpeg"
   # Os:require "convert" "imagemagick"
   # Os:require "IO:progressbar" "basher install pforret/IO:progressbar"
   # (code)
+  local config_command_line=""
+  local lib_command_line=""
+  local param_command_line=""
+  local nextflow_command_line
+
+  ### config_dir
+  if [[ "${config_dir}" != "" ]]; then
+    config_command_line="-C ${config_dir}"
+    IO:debug "$info_icon Will use config_command_line :[$config_command_line]"
+  fi
+  IO:log "config_dir: [${config_dir}]"
+
+  ### lib_dir
+  if [[ "${lib_dir}" != "" ]]; then
+    lib_command_line="-lib ${lib_dir}"
+  fi
+  IO:log "lib_dir: [${lib_dir}]"
+
+  ### param_dir
+  if [[ "${param_dir}" != "" ]]; then
+    param_files=($(find ${param_dir} -type f \( -iname "*.json" -o -iname "*.yaml" -o -iname "*.yml" \)))
+    for param_file in "${param_files[@]}"
+    do
+      param_command_line="${param_command_line} -params-file ${param_file}"
+    done
+  fi
+  IO:log "param_command_line: [${param_command_line}]"
+
+
+  ### creating run_dir_full
+  IO:debug "$info_icon Create folder : [$run_dir_full]"
+  mkdir -p "$run_dir_full"
+  local status=$?
+  IO:log "creation run_dir_full folder [${run_dir_full}] status [$status]"
+  [[ $? -ne 0 ]] && IO:die "run_dir_full folder: [${run_dir_full}] has not been generated"
+
+  ### creating command.sh file
+  < "${default_sh_template_file}" awk \
+  -v before_script="${before_script}" \
+  -v module_load="${module_load}" \
+  -v run_dir="${run_dir_full}" \
+  -v config_command_line="${config_command_line}" \
+  -v lib_command_line="${lib_command_line}" \
+  -v param_command_line="${param_command_line}" \
+  -v project_dir="${project_dir}" \
+  -v after_script="${after_script}" \
+  -v script_version="${script_version}" \
+  -v execution_date="${execution_day}" \
+  -v nextflow_bin_path="${nextflow_bin_path}" \
+  -v nextflow_version_current="${nextflow_version_current}" \
+  '{
+    gsub("{{BEFORE_SCRIPT}}",before_script);
+    gsub("{{MODULE_LOAD}}",module_load);
+    gsub("{{RUN_DIR}}",run_dir);
+    gsub("{{CONFIG_COMMAND_LINE}}",config_command_line);
+    gsub("{{LIB_COMMAND_LINE}}",lib_command_line);
+    gsub("{{PARAM_COMMAND_LINE}}",param_command_line);
+    gsub("{{PROJECT_DIR}}",project_dir);
+    gsub("{{AFTER_SCRIPT}}",after_script);
+    gsub("{{SCRIPT_VERSION}}",script_version);
+    gsub("{{EXECUTION_DATE}}",execution_date);
+    gsub("{{NEXTFLOW_BIN_PATH}},nextflow_bin_path);
+    gsub("{{NEXTFLOW_VERSION_CURRENT}},nextflow_version_current);
+    print;
+  }' > "$command_sh_file"
+  [[ $? -ne 0 ]] && IO:die "TMP command_sh_file: [${command_sh_file}] has not been generated"
+  IO:log "command_sh_file: [${command_sh_file}]"
+  chmod +x "$command_sh_file"
+
+  ### creating command.run file
+  < "${executor_run_template_file}" awk \
+  -v stdout_file="${stdout_file}" \
+  -v stderr_file="${stderr_file}" \
+  -v queue_name="${EXECUTOR_DEFAULT_QUEUE}" \
+  -v job_name="${pipeline_name}_${uuid}" \
+  -v project_name="${pipeline_name}_${pipeline_version}" \
+  -v command_sh_file="${command_sh_file}" \
+  '{
+  gsub("{{STDOUT_FILE}}",stdout_file);
+  gsub("{{STDERR_FILE}}",stderr_file);
+  gsub("{{QUEUE_NAME}}",queue_name);
+  gsub("{{JOB_NAME}}",job_name);
+  gsub("{{PROJECT_NAME}}",project_name);
+  gsub("{{COMMAND_SH_FILE}}",command_sh_file);
+  print;
+  }' > "$command_run_file"
+  [[ $? -ne 0 ]] && IO:die "TMP command_run_file: [${command_run_file}] has not been generated"
+  IO:log "command_run_file: [${command_run_file}]"
+  chmod +x "$command_run_file"
+
+}
+
 do_run(){
   IO:log "execution: [${command_run_file}]"
   # exec bash -c "${$command_run_file}"
@@ -130,10 +395,15 @@ do_run(){
     IO:die "run_dir_full folder: [${run_dir_full}] has not been generated"
   fi
 }
+
+do_config() {
+  IO:log "config"
+
+
 }
 
-do_action2() {
-  IO:log "action2"
+do_log() {
+  IO:log "log"
   # (code)
 
 }
