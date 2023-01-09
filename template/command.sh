@@ -11,6 +11,9 @@
 {{MODULE_LOAD}}
 ## check run_dir
 [[ {{RUN_DIR}} ]] cd {{RUN_DIR}}
+## environment variables to apply each time
+export NXF_ANSI_LOG="false" ## disable by default
+export NXF_VER="{{NEXTFLOW_VERSION_CURRENT}}" ## nextflow version double check
 ## 
 set +e
 {{NEXTFLOW_BIN_PATH}} run {{CONFIG_COMMAND_LINE}} {{LIB_COMMAND_LINE}} {{PARAM_COMMAND_LINE}} {{PROJECT_DIR}}
