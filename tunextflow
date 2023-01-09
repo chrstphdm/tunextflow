@@ -176,12 +176,12 @@ function IO:initialize() {
   if [[ $unicode -gt 0 ]]; then
     char_succes="✅"
     char_fail="⛔"
-    char_alert="✴️"
+    char_alert="❗"
     char_wait="⏳"
-    info_icon="🌼"
-    config_icon="🌱"
+    info_icon="ℹ"
+    config_icon="⚒️"
     clean_icon="🧽"
-    require_icon="🔌"
+    require_icon="🖇️"
   else
     char_succes="OK "
     char_fail="!! "
